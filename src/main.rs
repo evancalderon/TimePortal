@@ -60,6 +60,8 @@ async fn main() -> Result<(), ApplicationError> {
         }
     }
 
+    server.await??;
+
     Ok(())
 }
 
