@@ -30,7 +30,7 @@ async fn main() -> Result<(), ApplicationError> {
     println!("Web address: http://{local_ip}:12000");
     let addr = SocketAddr::from_str("0.0.0.0:12000")?;
 
-    let main = async move || -> Result<(), ApplicationError> {
+    let main = async move {
         let server = tokio::spawn(async move {
             Server::try_bind(&addr)?
                 .serve(router.into_make_service())
@@ -41,7 +41,7 @@ async fn main() -> Result<(), ApplicationError> {
         loop {
             for _ in 0..60 * 5 {
                 if server.is_finished() {
-                    return Ok(());
+                    return;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -62,7 +62,7 @@ async fn main() -> Result<(), ApplicationError> {
         }
     };
 
-    tokio::spawn(main()).await??;
+    tokio::spawn(main).await?;
 
     Ok(())
 }
