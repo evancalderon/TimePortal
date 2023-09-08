@@ -30,39 +30,35 @@ async fn main() -> Result<(), ApplicationError> {
     println!("Web address: http://{local_ip}:12000");
     let addr = SocketAddr::from_str("0.0.0.0:12000")?;
 
-    let main = async move {
-        let server = tokio::spawn(async move {
-            Server::try_bind(&addr)?
-                .serve(router.into_make_service())
-                .with_graceful_shutdown(shutdown())
-                .await
-        });
+    let server = tokio::spawn(async move {
+        Server::try_bind(&addr)?
+            .serve(router.into_make_service())
+            .with_graceful_shutdown(shutdown())
+            .await
+    });
 
-        loop {
-            for _ in 0..60 * 5 {
-                if server.is_finished() {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+    'outer: loop {
+        for _ in 0..60 * 5 {
+            if server.is_finished() {
+                break 'outer;
             }
-            {
-                let mut should_refresh = app.should_refresh.lock().unwrap();
-                if !*should_refresh {
-                    continue;
-                }
-                *should_refresh = false;
-            }
-            let loaded_students = students::load_students().await;
-            if let Err(err) = loaded_students {
-                println!("{:?}", err);
-            } else {
-                let mut students_lock = app.students.lock().unwrap();
-                *students_lock = loaded_students.unwrap();
-            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-    };
-
-    tokio::spawn(main).await?;
+        {
+            let mut should_refresh = app.should_refresh.lock().unwrap();
+            if !*should_refresh {
+                continue;
+            }
+            *should_refresh = false;
+        }
+        let loaded_students = students::load_students().await;
+        if let Err(err) = loaded_students {
+            println!("{:?}", err);
+        } else {
+            let mut students_lock = app.students.lock().unwrap();
+            *students_lock = loaded_students.unwrap();
+        }
+    }
 
     Ok(())
 }
