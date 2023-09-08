@@ -30,7 +30,7 @@ async fn main() -> Result<(), ApplicationError> {
     println!("Web address: http://{local_ip}:12000");
     let addr = SocketAddr::from_str("0.0.0.0:12000")?;
 
-    let _ = tokio::spawn(async move || -> Result<(), ApplicationError> {
+    let main = async move || -> Result<(), ApplicationError> {
         let server = tokio::spawn(async move {
             Server::try_bind(&addr)?
                 .serve(router.into_make_service())
@@ -44,11 +44,13 @@ async fn main() -> Result<(), ApplicationError> {
                     return Ok(());
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            {
                 let mut should_refresh = app.should_refresh.lock().unwrap();
-                if *should_refresh {
-                    *should_refresh = false;
-                    break;
+                if !*should_refresh {
+                    continue;
                 }
+                *should_refresh = false;
             }
             let loaded_students = students::load_students().await;
             if let Err(err) = loaded_students {
@@ -58,8 +60,9 @@ async fn main() -> Result<(), ApplicationError> {
                 *students_lock = loaded_students.unwrap();
             }
         }
-    }())
-    .await??;
+    };
+
+    tokio::spawn(main()).await??;
 
     Ok(())
 }
