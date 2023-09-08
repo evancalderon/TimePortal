@@ -13,9 +13,6 @@
 	let students: Array<Student> = [];
 	$: students;
 	onMount(async () => {
-		fetch('/api/forcerefresh', {
-			method: 'POST',
-		});
 		students = await fetch_students();
 		setInterval(fetch_students, 15 * 1000);
 	});
