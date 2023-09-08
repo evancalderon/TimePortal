@@ -7,8 +7,11 @@
 	export let time_start: string;
 	export let time_end: string;
 
-	let time_left = 0;
-	$: time_left;
+	let time_left: number;
+	$: time_left = get_time_left();
+	
+	let colors = ['white', 'yellow', 'orange', 'green', 'blue', 'purple', 'brown', 'red', 'black'];
+	let color_map = new Map(colors.map((v) => [v, v]));
 
 	let split = time_end.split(':');
 	let hour = split[0];
@@ -16,18 +19,22 @@
 	let minute = minute_split[0];
 	let ampm = minute_split[1];
 	let moment_end = moment()
-		.set('hour', parseInt(hour) + (ampm == 'pm' ? 12 : 0))
+		.set('hour', parseInt(hour))
 		.set('minute', parseInt(minute));
 
+	if (ampm == "pm") {
+		moment_end = moment_end.set('hour', parseInt(hour) % 12 + 12)
+	}
+
 	onMount(() => {
-		time_left = Math.max(0, moment_end.diff(moment(), 'minutes'));
+		time_left = get_time_left();
 
 		if (time_left == 0) {
 			return;
 		}
 
 		let timer = setInterval(() => {
-			time_left = Math.max(0, moment_end.diff(moment(), 'minutes'));
+			time_left = get_time_left();
 			if (time_left == 0) {
 				clearInterval(timer);
 			}
@@ -38,8 +45,9 @@
 		};
 	});
 
-	let colors = ['white', 'yellow', 'orange', 'green', 'blue', 'purple', 'brown', 'red', 'black'];
-	let color_map = new Map(colors.map((v) => [v, v]));
+	function get_time_left() {
+		return Math.max(0, moment_end.diff(moment(), 'minutes') + 1);
+	}
 </script>
 
 <div class="card">
