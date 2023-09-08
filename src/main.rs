@@ -38,11 +38,12 @@ async fn main() -> Result<(), ApplicationError> {
     });
 
     'outer: loop {
-        for _ in 0..60 * 5 {
-            if server.is_finished() {
-                break 'outer;
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        let loaded_students = students::load_students().await;
+        if let Err(err) = loaded_students {
+            println!("{:?}", err);
+        } else {
+            let mut students_lock = app.students.lock().unwrap();
+            *students_lock = loaded_students.unwrap();
         }
         {
             let mut should_refresh = app.should_refresh.lock().unwrap();
@@ -51,12 +52,11 @@ async fn main() -> Result<(), ApplicationError> {
             }
             *should_refresh = false;
         }
-        let loaded_students = students::load_students().await;
-        if let Err(err) = loaded_students {
-            println!("{:?}", err);
-        } else {
-            let mut students_lock = app.students.lock().unwrap();
-            *students_lock = loaded_students.unwrap();
+        for _ in 0..60 * 5 {
+            if server.is_finished() {
+                break 'outer;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
