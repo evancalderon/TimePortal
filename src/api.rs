@@ -2,17 +2,12 @@ use axum::{extract::State, routing, Json, Router};
 use chrono::{DateTime, Utc};
 
 pub fn routes() -> Router<crate::AppState> {
-    Router::new()
-        .route("/students", routing::get(get_students))
-        .route("/forcerefresh", routing::post(post_force_refresh))
+    Router::new().route("/students", routing::get(get_students))
 }
 
 async fn get_students(State(state): State<crate::AppState>) -> Json<Vec<Student>> {
+    *state.should_refresh.lock().unwrap() = true;
     Json(state.students.lock().unwrap().clone())
-}
-
-async fn post_force_refresh(State(state): State<crate::AppState>) {
-    *state.refresh_now.lock().unwrap() = true;
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

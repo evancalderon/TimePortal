@@ -1,3 +1,5 @@
+#![feature(async_closure)]
+
 use axum::{Router, Server};
 use local_ip_address::local_ip;
 use std::{
@@ -7,6 +9,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tokio::task::JoinError;
 
 mod api;
 mod frontend;
@@ -16,7 +19,7 @@ mod students;
 async fn main() -> Result<(), ApplicationError> {
     let app = AppState {
         students: Arc::new(Mutex::new(vec![])),
-        refresh_now: Arc::new(Mutex::new(false)),
+        should_refresh: Arc::new(Mutex::new(false)),
     };
     let router = Router::new()
         .nest("/api", api::routes())
@@ -26,40 +29,37 @@ async fn main() -> Result<(), ApplicationError> {
     let local_ip = local_ip().unwrap();
     println!("Web address: http://{local_ip}:12000");
     let addr = SocketAddr::from_str("0.0.0.0:12000")?;
-    let server = async move {
-        Server::try_bind(&addr)?
-            .serve(router.into_make_service())
-            .with_graceful_shutdown(shutdown())
-            .await
-    };
 
-    tokio::spawn(async move {
+    let _ = tokio::spawn(async move || -> Result<(), ApplicationError> {
+        let server = tokio::spawn(async move {
+            Server::try_bind(&addr)?
+                .serve(router.into_make_service())
+                .with_graceful_shutdown(shutdown())
+                .await
+        });
+
         loop {
-            let loaded = students::load_students().await;
-            if let Err(err) = loaded {
+            for _ in 0..60 * 5 {
+                if server.is_finished() {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let mut should_refresh = app.should_refresh.lock().unwrap();
+                if *should_refresh {
+                    *should_refresh = false;
+                    break;
+                }
+            }
+            let loaded_students = students::load_students().await;
+            if let Err(err) = loaded_students {
                 println!("{:?}", err);
             } else {
-                let students = loaded.unwrap();
-                let mut lock = app.students.lock().unwrap();
-                *lock = students;
-            }
-            for i in 0..30 * 5 {
-                if i % 2 == 1 {
-                    continue;
-                }
-                {
-                    let mut refresh_now = app.refresh_now.lock().unwrap();
-                    if *refresh_now {
-                        *refresh_now = false;
-                        break;
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                let mut students_lock = app.students.lock().unwrap();
+                *students_lock = loaded_students.unwrap();
             }
         }
-    });
-
-    tokio::join!(server).0.ok();
+    }())
+    .await??;
 
     Ok(())
 }
@@ -70,12 +70,14 @@ enum ApplicationError {
     InvalidSocketAddr(#[from] AddrParseError),
     #[error("Failed to bind to address")]
     BindError(#[from] hyper::Error),
+    #[error("Server thread has panicked, shutting down...")]
+    PanickError(#[from] JoinError),
 }
 
 #[derive(Clone)]
 pub struct AppState {
     students: Arc<Mutex<Vec<api::Student>>>,
-    refresh_now: Arc<Mutex<bool>>,
+    should_refresh: Arc<Mutex<bool>>,
 }
 
 async fn shutdown() {
