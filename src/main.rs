@@ -1,11 +1,14 @@
 #![feature(async_closure)]
 
 use axum::{Router, Server};
+use clap::Parser;
 use local_ip_address::local_ip;
 use std::{
-    net::{AddrParseError, SocketAddr},
-    str::FromStr,
-    sync::{Arc, Mutex},
+    net::AddrParseError,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -15,70 +18,49 @@ mod api;
 mod frontend;
 mod students;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ApplicationError> {
+    let args = AppArgs::parse();
     let app = AppState {
         students: Arc::new(Mutex::new(vec![])),
-        should_refresh: Arc::new(Mutex::new(false)),
+        should_refresh: Arc::new(AtomicBool::new(true)),
     };
     let router = Router::new()
         .nest("/api", api::routes())
         .merge(frontend::routes())
         .with_state(app.clone());
 
-    let local_ip = local_ip().unwrap();
-    println!("Web address: http://{local_ip}:12000");
-    let addr = SocketAddr::from_str("0.0.0.0:12000")?;
-
-    let server = tokio::spawn(async move {
-        Server::try_bind(&addr)?
+    println!("Web address: http://{}:12000", local_ip().unwrap());
+    let mut server = tokio::spawn(
+        Server::try_bind(&([0, 0, 0, 0], 12000).into())?
             .serve(router.into_make_service())
-            .with_graceful_shutdown(shutdown())
-            .await
-    });
+            .with_graceful_shutdown(shutdown()),
+    );
 
-    'outer: loop {
-        let loaded_students = students::load_students().await;
-        if let Err(err) = loaded_students {
-            println!("{:?}", err);
-        } else {
-            let mut students_lock = app.students.lock().unwrap();
-            *students_lock = loaded_students.unwrap();
+    Ok(loop {
+        let should_refresh =
+            app.should_refresh
+                .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed);
+        if let Ok(true) = should_refresh {
+            do_refresh(&app).await;
         }
-        {
-            let mut should_refresh = app.should_refresh.lock().unwrap();
-            if !*should_refresh {
-                continue;
-            }
-            *should_refresh = false;
-        }
-        for _ in 0..60 * 5 {
-            if server.is_finished() {
-                break 'outer;
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+        let sleep = tokio::time::sleep(Duration::from_secs(60 * args.refresh_every));
+        tokio::pin!(sleep);
+        tokio::select! {
+            result = &mut server => break result??,
+            _ = &mut sleep => drop(sleep),
+        };
+    })
+}
+
+async fn do_refresh(app: &AppState) {
+    let loaded_students = students::load_students().await;
+    if let Err(err) = loaded_students {
+        println!("{:?}", err);
+    } else {
+        let mut students_lock = app.students.lock().unwrap();
+        *students_lock = loaded_students.unwrap();
     }
-
-    server.await??;
-
-    Ok(())
-}
-
-#[derive(Error, Debug)]
-enum ApplicationError {
-    #[error("Invalid socket address")]
-    InvalidSocketAddr(#[from] AddrParseError),
-    #[error("Failed to bind to address")]
-    BindError(#[from] hyper::Error),
-    #[error("Server thread has panicked, shutting down...")]
-    PanickError(#[from] JoinError),
-}
-
-#[derive(Clone)]
-pub struct AppState {
-    students: Arc<Mutex<Vec<api::Student>>>,
-    should_refresh: Arc<Mutex<bool>>,
 }
 
 async fn shutdown() {
@@ -107,4 +89,28 @@ async fn shutdown() {
     }
 
     println!("signal received, shutting down gracefully");
+}
+
+#[derive(Error, Debug)]
+enum ApplicationError {
+    #[error("Invalid socket address")]
+    InvalidSocketAddr(#[from] AddrParseError),
+    #[error("Failed to bind to address")]
+    BindError(#[from] hyper::Error),
+    #[error("Server thread has panicked, shutting down...")]
+    PanickError(#[from] JoinError),
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    students: Arc<Mutex<Vec<api::Student>>>,
+    should_refresh: Arc<AtomicBool>,
+}
+
+#[derive(clap::Parser)]
+#[command(author = "Evan Calderon", version = "1.0.0", long_about = None)]
+struct AppArgs {
+    // The number of minutes to wait between refreshes
+    #[arg(short = 'e', long, default_value_t = 5)]
+    refresh_every: u64,
 }
